@@ -1,13 +1,47 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <IOKit/hid/IOHIDEventSystemClient.h>
-#import <IOKit/hid/IOHIDEvent.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
 #define CLICK_INTERVAL 1.0
 #define BUTTON_SIZE 60
 #define BUTTON_CORNER_RADIUS 30
 #define LONG_PRESS_DURATION 0.5
+
+#define kIOHIDEventTypeDigitizerTouch 11
+#define kIOHIDDigitizerTouchStateTouching 2
+#define kIOHIDDigitizerTouchStateNotTouching 0
+
+typedef CFTypeRef IOHIDEventSystemClientRef;
+typedef CFTypeRef IOHIDEventRef;
+
+extern IOHIDEventSystemClientRef IOHIDEventSystemClientCreate(CFAllocatorRef allocator);
+extern IOHIDEventRef IOHIDEventCreateDigitizerEvent(
+    CFAllocatorRef allocator,
+    uint32_t eventType,
+    CFAbsoluteTime eventTime,
+    uint64_t senderID,
+    uint32_t options,
+    uint32_t digitizerOptions,
+    uint32_t touchState,
+    uint32_t fingerID,
+    uint32_t touchIdentifier,
+    int32_t x,
+    int32_t y,
+    uint32_t tipPressure,
+    uint32_t barrelPressure,
+    uint32_t azimuth,
+    uint32_t altitude,
+    uint32_t twist,
+    uint32_t width,
+    uint32_t height,
+    uint32_t deviceID,
+    uint32_t deviceType,
+    uint32_t collectionIndex,
+    uint32_t displayWidth,
+    uint32_t displayHeight
+);
+extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event, uint32_t options);
 
 static IOHIDEventSystemClientRef _eventSystemClient = NULL;
 static NSTimer *_clickTimer = NULL;
@@ -30,8 +64,8 @@ static void sendTouchEvent(CGPoint point, BOOL isDown) {
         (isDown ? kIOHIDDigitizerTouchStateTouching : kIOHIDDigitizerTouchStateNotTouching),
         0,
         0,
-        (int)(point.x * 1000),
-        (int)(point.y * 1000),
+        (int32_t)(point.x * 1000),
+        (int32_t)(point.y * 1000),
         1,
         0,
         0,
