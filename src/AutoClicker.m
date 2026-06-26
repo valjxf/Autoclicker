@@ -53,10 +53,11 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
     CGPoint _initialTouchPoint;
     CGPoint _initialButtonCenter;
     BOOL _buttonCreated;
+    BOOL _observerRegistered;
 }
 
 + (instancetype)sharedManager;
-- (void)setup;
+- (void)delayedStart;
 - (void)createFloatButton;
 - (void)ensureIOHIDClient;
 - (void)sendTouchEvent:(CGPoint)point isDown:(BOOL)isDown;
@@ -83,41 +84,51 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
         _eventSystemClient = NULL;
         _isRunning = NO;
         _buttonCreated = NO;
+        _observerRegistered = NO;
         _initialTouchPoint = CGPointZero;
         _initialButtonCenter = CGPointZero;
     }
     return self;
 }
 
-- (void)setup {
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(onAppDidFinishLaunching:)
-                                                 name:UIApplicationDidFinishLaunchingNotification
-                                               object:nil];
+- (void)delayedStart {
+    if (_observerRegistered) return;
+    _observerRegistered = YES;
     
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(onAppDidBecomeActive:)
-                                                 name:UIApplicationDidBecomeActiveNotification
-                                               object:nil];
-}
-
-- (void)onAppDidFinishLaunching:(NSNotification *)notification {
-    [self createFloatButton];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onAppDidBecomeActive:)
+                                                     name:UIApplicationDidBecomeActiveNotification
+                                                   object:nil];
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onWindowDidBecomeKey:)
+                                                     name:UIWindowDidBecomeKeyNotification
+                                                   object:nil];
+        
+        [self performSelector:@selector(createFloatButton) withObject:nil afterDelay:1.0];
+    });
 }
 
 - (void)onAppDidBecomeActive:(NSNotification *)notification {
     if (!_buttonCreated) {
-        [self createFloatButton];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self createFloatButton];
+        });
+    }
+}
+
+- (void)onWindowDidBecomeKey:(NSNotification *)notification {
+    if (!_buttonCreated) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self createFloatButton];
+        });
     }
 }
 
 - (void)ensureIOHIDClient {
     if (_eventSystemClient == NULL) {
-        @try {
-            _eventSystemClient = IOHIDEventSystemClientCreate(NULL);
-        } @catch (NSException *e) {
-            _eventSystemClient = NULL;
-        }
+        _eventSystemClient = IOHIDEventSystemClientCreate(NULL);
     }
 }
 
@@ -126,38 +137,35 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
     
     if (!_eventSystemClient) return;
     
-    @try {
-        IOHIDEventRef event = IOHIDEventCreateDigitizerEvent(
-            NULL,
-            kIOHIDEventTypeDigitizerTouch,
-            CFAbsoluteTimeGetCurrent(),
-            0,
-            0,
-            0,
-            (isDown ? kIOHIDDigitizerTouchStateTouching : kIOHIDDigitizerTouchStateNotTouching),
-            0,
-            0,
-            (int32_t)(point.x * 1000),
-            (int32_t)(point.y * 1000),
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0
-        );
-        
-        if (event) {
-            IOHIDEventSystemClientQueueEvent(_eventSystemClient, event, 0);
-            CFRelease(event);
-        }
-    } @catch (NSException *e) {
+    IOHIDEventRef event = IOHIDEventCreateDigitizerEvent(
+        NULL,
+        kIOHIDEventTypeDigitizerTouch,
+        CFAbsoluteTimeGetCurrent(),
+        0,
+        0,
+        0,
+        (isDown ? kIOHIDDigitizerTouchStateTouching : kIOHIDDigitizerTouchStateNotTouching),
+        0,
+        0,
+        (int32_t)(point.x * 1000),
+        (int32_t)(point.y * 1000),
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    );
+    
+    if (event) {
+        IOHIDEventSystemClientQueueEvent(_eventSystemClient, event, 0);
+        CFRelease(event);
     }
 }
 
@@ -178,7 +186,7 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
         _clickTimer = nil;
         _isRunning = NO;
         button.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.9];
-        [button setTitle:@"▶" forState:UIControlStateNormal];
+        [button setTitle:@"\u25B6" forState:UIControlStateNormal];
     } else {
         _isRunning = YES;
         _clickTimer = [NSTimer scheduledTimerWithTimeInterval:CLICK_INTERVAL
@@ -188,7 +196,7 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
                                                       repeats:YES];
         [[NSRunLoop mainRunLoop] addTimer:_clickTimer forMode:NSDefaultRunLoopMode];
         button.backgroundColor = [UIColor colorWithRed:1.0 green:0.3 blue:0.3 alpha:0.9];
-        [button setTitle:@"■" forState:UIControlStateNormal];
+        [button setTitle:@"\u25A0" forState:UIControlStateNormal];
     }
 }
 
@@ -217,66 +225,61 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
 }
 
 - (void)createFloatButton {
-    @try {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            @try {
-                UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
-                if (!keyWindow) {
-                    NSArray *scenes = [[UIApplication sharedApplication] connectedScenes].allObjects;
-                    for (UIWindowScene *scene in scenes) {
-                        if (scene.windows.count > 0) {
-                            keyWindow = scene.windows.firstObject;
-                            break;
-                        }
-                    }
-                }
-                
-                if (!keyWindow) {
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        [self createFloatButton];
-                    });
-                    return;
-                }
-                
-                if (_buttonCreated && _floatWindow) {
-                    return;
-                }
-                
-                CGRect screenBounds = [[UIScreen mainScreen] bounds];
-                
-                _floatWindow = [[UIWindow alloc] initWithFrame:screenBounds];
-                _floatWindow.windowLevel = UIWindowLevelAlert + 1;
-                _floatWindow.backgroundColor = [UIColor clearColor];
-                _floatWindow.hidden = NO;
-                
-                _floatButton = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, BUTTON_SIZE, BUTTON_SIZE)];
-                _floatButton.center = CGPointMake(screenBounds.size.width - BUTTON_SIZE - 20,
-                                                  screenBounds.size.height / 2);
-                _floatButton.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.9];
-                _floatButton.layer.cornerRadius = BUTTON_CORNER_RADIUS;
-                _floatButton.layer.masksToBounds = YES;
-                _floatButton.layer.shadowColor = [UIColor blackColor].CGColor;
-                _floatButton.layer.shadowOpacity = 0.5;
-                _floatButton.layer.shadowOffset = CGSizeMake(0, 2);
-                _floatButton.layer.shadowRadius = 4;
-                _floatButton.titleLabel.font = [UIFont boldSystemFontOfSize:24];
-                [_floatButton setTitle:@"▶" forState:UIControlStateNormal];
-                [_floatButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-                
-                [_floatButton addTarget:self action:@selector(toggleAutoClick:) forControlEvents:UIControlEventTouchUpInside];
-                
-                UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
-                longPress.minimumPressDuration = LONG_PRESS_DURATION;
-                [_floatButton addGestureRecognizer:longPress];
-                
-                [_floatWindow addSubview:_floatButton];
-                
-                _buttonCreated = YES;
-            } @catch (NSException *e) {
+    if (_buttonCreated) return;
+    
+    NSArray *scenes = [UIApplication sharedApplication].connectedScenes.allObjects;
+    UIWindow *keyWindow = nil;
+    
+    for (UIScene *scene in scenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            if (windowScene.windows.count > 0) {
+                keyWindow = windowScene.windows.firstObject;
+                break;
             }
-        });
-    } @catch (NSException *e) {
+        }
     }
+    
+    if (!keyWindow) {
+        keyWindow = [UIApplication sharedApplication].keyWindow;
+    }
+    
+    if (!keyWindow) {
+        [self performSelector:@selector(createFloatButton) withObject:nil afterDelay:0.5];
+        return;
+    }
+    
+    CGRect screenBounds = [UIScreen mainScreen].bounds;
+    
+    _floatWindow = [[UIWindow alloc] initWithFrame:screenBounds];
+    _floatWindow.windowLevel = UIWindowLevelAlert + 1;
+    _floatWindow.backgroundColor = [UIColor clearColor];
+    _floatWindow.hidden = NO;
+    
+    _floatButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    _floatButton.frame = CGRectMake(0, 0, BUTTON_SIZE, BUTTON_SIZE);
+    _floatButton.center = CGPointMake(screenBounds.size.width - BUTTON_SIZE - 20,
+                                      screenBounds.size.height / 2);
+    _floatButton.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:1.0 alpha:0.9];
+    _floatButton.layer.cornerRadius = BUTTON_CORNER_RADIUS;
+    _floatButton.layer.masksToBounds = YES;
+    _floatButton.layer.shadowColor = [UIColor blackColor].CGColor;
+    _floatButton.layer.shadowOpacity = 0.5;
+    _floatButton.layer.shadowOffset = CGSizeMake(0, 2);
+    _floatButton.layer.shadowRadius = 4;
+    _floatButton.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+    [_floatButton setTitle:@"\u25B6" forState:UIControlStateNormal];
+    [_floatButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    
+    [_floatButton addTarget:self action:@selector(toggleAutoClick:) forControlEvents:UIControlEventTouchUpInside];
+    
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
+    longPress.minimumPressDuration = LONG_PRESS_DURATION;
+    [_floatButton addGestureRecognizer:longPress];
+    
+    [_floatWindow addSubview:_floatButton];
+    
+    _buttonCreated = YES;
 }
 
 - (void)dealloc {
@@ -295,9 +298,13 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
 
 @end
 
-__attribute__((constructor)) static void initialize() {
-    @try {
-        [[AutoClickerManager sharedManager] setup];
-    } @catch (NSException *e) {
-    }
+@interface AutoClickerRunner : NSObject
+@end
+
+@implementation AutoClickerRunner
+
++ (void)load {
+    [[AutoClickerManager sharedManager] delayedStart];
 }
+
+@end
