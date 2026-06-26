@@ -177,7 +177,7 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
 
 - (void)createFloatButton {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *scene = [[[UIApplication sharedApplication] connectedScenes] allObjects].firstObject;
+        UIWindowScene *scene = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] allObjects].firstObject;
         UIWindow *keyWindow = scene.windows.firstObject;
         
         if (!keyWindow) {
@@ -228,8 +228,6 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
         CFRelease(_eventSystemClient);
         _eventSystemClient = NULL;
     }
-    
-    [super dealloc];
 }
 
 @end
