@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <objc/runtime.h>
 
 #define CLICK_INTERVAL 1.0
 #define BUTTON_SIZE 60
@@ -43,15 +44,48 @@ extern IOHIDEventRef IOHIDEventCreateDigitizerEvent(
 );
 extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event, uint32_t options);
 
-static IOHIDEventSystemClientRef _eventSystemClient = NULL;
-static NSTimer *_clickTimer = NULL;
-static BOOL _isRunning = NO;
-static UIWindow *_floatWindow = NULL;
-static UIButton *_floatButton = NULL;
-static CGPoint _initialTouchPoint = CGPointZero;
-static CGPoint _initialButtonCenter = CGPointZero;
+@interface AutoClickerManager : NSObject {
+    IOHIDEventSystemClientRef _eventSystemClient;
+    NSTimer *_clickTimer;
+    BOOL _isRunning;
+    UIWindow *_floatWindow;
+    UIButton *_floatButton;
+    CGPoint _initialTouchPoint;
+    CGPoint _initialButtonCenter;
+}
 
-static void sendTouchEvent(CGPoint point, BOOL isDown) {
++ (instancetype)sharedManager;
+- (void)createFloatButton;
+- (void)sendTouchEvent:(CGPoint)point isDown:(BOOL)isDown;
+- (void)performClick:(CGPoint)point;
+- (void)clickTimerFired:(NSTimer *)timer;
+- (void)toggleAutoClick:(UIButton *)button;
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
+
+@end
+
+@implementation AutoClickerManager
+
++ (instancetype)sharedManager {
+    static AutoClickerManager *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[self alloc] init];
+    });
+    return instance;
+}
+
+- (instancetype)init {
+    if (self = [super init]) {
+        _eventSystemClient = IOHIDEventSystemClientCreate(NULL);
+        _isRunning = NO;
+        _initialTouchPoint = CGPointZero;
+        _initialButtonCenter = CGPointZero;
+    }
+    return self;
+}
+
+- (void)sendTouchEvent:(CGPoint)point isDown:(BOOL)isDown {
     if (!_eventSystemClient) return;
     
     IOHIDEventRef event = IOHIDEventCreateDigitizerEvent(
@@ -86,18 +120,18 @@ static void sendTouchEvent(CGPoint point, BOOL isDown) {
     }
 }
 
-static void performClick(CGPoint point) {
-    sendTouchEvent(point, YES);
+- (void)performClick:(CGPoint)point {
+    [self sendTouchEvent:point isDown:YES];
     usleep(50000);
-    sendTouchEvent(point, NO);
+    [self sendTouchEvent:point isDown:NO];
 }
 
-static void clickTimerFired(NSTimer *timer) {
+- (void)clickTimerFired:(NSTimer *)timer {
     CGPoint buttonCenter = [_floatButton convertPoint:_floatButton.center toView:nil];
-    performClick(buttonCenter);
+    [self performClick:buttonCenter];
 }
 
-static void toggleAutoClick(UIButton *button) {
+- (void)toggleAutoClick:(UIButton *)button {
     if (_isRunning) {
         [_clickTimer invalidate];
         _clickTimer = nil;
@@ -117,7 +151,7 @@ static void toggleAutoClick(UIButton *button) {
     }
 }
 
-static void handleLongPress(UILongPressGestureRecognizer *gesture) {
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
         _initialTouchPoint = [gesture locationInView:_floatWindow];
         _initialButtonCenter = _floatButton.center;
@@ -141,12 +175,14 @@ static void handleLongPress(UILongPressGestureRecognizer *gesture) {
     }
 }
 
-static void createFloatButton() {
+- (void)createFloatButton {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
+        UIWindowScene *scene = [[[UIApplication sharedApplication] connectedScenes] allObjects].firstObject;
+        UIWindow *keyWindow = scene.windows.firstObject;
+        
         if (!keyWindow) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                createFloatButton();
+                [self createFloatButton];
             });
             return;
         }
@@ -177,12 +213,26 @@ static void createFloatButton() {
         UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
         longPress.minimumPressDuration = LONG_PRESS_DURATION;
         [_floatButton addGestureRecognizer:longPress];
-        [longPress release];
         
         [_floatWindow addSubview:_floatButton];
-        [_floatButton release];
     });
 }
+
+- (void)dealloc {
+    if (_clickTimer) {
+        [_clickTimer invalidate];
+        _clickTimer = nil;
+    }
+    
+    if (_eventSystemClient) {
+        CFRelease(_eventSystemClient);
+        _eventSystemClient = NULL;
+    }
+    
+    [super dealloc];
+}
+
+@end
 
 @interface UIApplication (AutoClickerHook)
 @end
@@ -212,7 +262,7 @@ static void createFloatButton() {
 
 - (BOOL)ac_application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        createFloatButton();
+        [[AutoClickerManager sharedManager] createFloatButton];
     });
     
     return [self ac_application:application didFinishLaunchingWithOptions:launchOptions];
@@ -221,28 +271,5 @@ static void createFloatButton() {
 @end
 
 __attribute__((constructor)) static void initialize() {
-    _eventSystemClient = IOHIDEventSystemClientCreate(NULL);
-}
-
-__attribute__((destructor)) static void cleanup() {
-    if (_clickTimer) {
-        [_clickTimer invalidate];
-        _clickTimer = nil;
-    }
-    
-    if (_floatButton) {
-        [_floatButton removeFromSuperview];
-        [_floatButton release];
-        _floatButton = nil;
-    }
-    
-    if (_floatWindow) {
-        [_floatWindow release];
-        _floatWindow = nil;
-    }
-    
-    if (_eventSystemClient) {
-        CFRelease(_eventSystemClient);
-        _eventSystemClient = NULL;
-    }
+    [AutoClickerManager sharedManager];
 }
