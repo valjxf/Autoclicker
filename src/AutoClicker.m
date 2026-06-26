@@ -52,9 +52,11 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
     UIButton *_floatButton;
     CGPoint _initialTouchPoint;
     CGPoint _initialButtonCenter;
+    BOOL _buttonCreated;
 }
 
 + (instancetype)sharedManager;
+- (void)start;
 - (void)createFloatButton;
 - (void)sendTouchEvent:(CGPoint)point isDown:(BOOL)isDown;
 - (void)performClick:(CGPoint)point;
@@ -79,10 +81,29 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
     if (self = [super init]) {
         _eventSystemClient = IOHIDEventSystemClientCreate(NULL);
         _isRunning = NO;
+        _buttonCreated = NO;
         _initialTouchPoint = CGPointZero;
         _initialButtonCenter = CGPointZero;
     }
     return self;
+}
+
+- (void)start {
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onAppDidBecomeActive:)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self createFloatButton];
+    });
+}
+
+- (void)onAppDidBecomeActive:(NSNotification *)notification {
+    if (!_buttonCreated) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self createFloatButton];
+        });
+    }
 }
 
 - (void)sendTouchEvent:(CGPoint)point isDown:(BOOL)isDown {
@@ -177,13 +198,25 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
 
 - (void)createFloatButton {
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *scene = (UIWindowScene *)[[[UIApplication sharedApplication] connectedScenes] allObjects].firstObject;
-        UIWindow *keyWindow = scene.windows.firstObject;
+        UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
+        if (!keyWindow) {
+            NSArray *scenes = [[UIApplication sharedApplication] connectedScenes].allObjects;
+            for (UIWindowScene *scene in scenes) {
+                if (scene.windows.count > 0) {
+                    keyWindow = scene.windows.firstObject;
+                    break;
+                }
+            }
+        }
         
         if (!keyWindow) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self createFloatButton];
             });
+            return;
+        }
+        
+        if (_buttonCreated && _floatWindow) {
             return;
         }
         
@@ -215,10 +248,14 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
         [_floatButton addGestureRecognizer:longPress];
         
         [_floatWindow addSubview:_floatButton];
+        
+        _buttonCreated = YES;
     });
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    
     if (_clickTimer) {
         [_clickTimer invalidate];
         _clickTimer = nil;
@@ -232,42 +269,8 @@ extern void IOHIDEventSystemClientQueueEvent(IOHIDEventSystemClientRef client, I
 
 @end
 
-@interface UIApplication (AutoClickerHook)
-@end
-
-@implementation UIApplication (AutoClickerHook)
-
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class class = [self class];
-        
-        SEL originalSelector = @selector(application:didFinishLaunchingWithOptions:);
-        SEL swizzledSelector = @selector(ac_application:didFinishLaunchingWithOptions:);
-        
-        Method originalMethod = class_getInstanceMethod(class, originalSelector);
-        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
-        
-        BOOL didAddMethod = class_addMethod(class, originalSelector, method_getImplementation(swizzledMethod), method_getTypeEncoding(swizzledMethod));
-        
-        if (didAddMethod) {
-            class_replaceMethod(class, swizzledSelector, method_getImplementation(originalMethod), method_getTypeEncoding(originalMethod));
-        } else {
-            method_exchangeImplementations(originalMethod, swizzledMethod);
-        }
-    });
-}
-
-- (BOOL)ac_application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[AutoClickerManager sharedManager] createFloatButton];
-    });
-    
-    return [self ac_application:application didFinishLaunchingWithOptions:launchOptions];
-}
-
-@end
-
 __attribute__((constructor)) static void initialize() {
-    [AutoClickerManager sharedManager];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[AutoClickerManager sharedManager] start];
+    });
 }
