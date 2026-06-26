@@ -14,11 +14,25 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Debug info
+      run: |
+        pwd
+        ls -la
+        xcode-select --version
+        xcrun --sdk iphoneos --show-sdk-path
+    
     - name: Select Xcode
       run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
     
     - name: Build dylib
-      run: make
+      run: |
+        ls -la
+        make V=1
+    
+    - name: Verify build
+      run: |
+        ls -la *.dylib 2>/dev/null || echo "No dylib found"
+        file AutoClicker.dylib 2>/dev/null || echo "File not found"
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
